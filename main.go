@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -19,13 +20,17 @@ var (
 	base         = "https://build2.syncthing.net"
 	branch       = "master"
 	listen       = "127.0.0.1:8123"
+	auth         = ""
 	maxCacheTime = 5 * time.Minute
+	projectName  = ""
 )
 
 func main() {
 	flag.StringVar(&base, "base", base, "TeamCity server address")
 	flag.StringVar(&branch, "branch", branch, "Branch to show")
 	flag.StringVar(&listen, "listen", listen, "Server listen address")
+	flag.StringVar(&projectName, "project", projectName, "Top level project")
+	flag.StringVar(&auth, "auth", auth, "username:password")
 	flag.DurationVar(&maxCacheTime, "cache", maxCacheTime, "Cache life time")
 	flag.Parse()
 
@@ -65,7 +70,7 @@ func handler(w http.ResponseWriter, req *http.Request) {
 }
 
 func getTpl() ([]byte, error) {
-	types, err := getBuildTypes(base)
+	types, err := getBuildTypes()
 	if err != nil {
 		return nil, err
 	}
@@ -88,12 +93,12 @@ func getTpl() ([]byte, error) {
 			projs = append(projs, project{Name: bt.ProjectName})
 		}
 
-		build, err := getLatestBuild(base, bt.ID, branch)
+		build, err := getLatestBuild(bt.ID, branch)
 		if err != nil {
 			continue
 		}
 
-		files, err := getFiles(base, build.ID)
+		files, err := getFiles(build.ID)
 		if err != nil {
 			continue
 		}
@@ -105,6 +110,7 @@ func getTpl() ([]byte, error) {
 
 	data := map[string]interface{}{
 		"Branch":   branch,
+		"Base":     base,
 		"Projects": projs,
 	}
 	buf := new(bytes.Buffer)
@@ -240,7 +246,7 @@ hr {
 				</p>
 				<ul>
 				{{range .Build.Files}}
-					<li><a href="{{.Content.HRef}}">{{.Name}}</a> ({{.SizeStr}})
+					<li><a href="{{$.Base}}{{.Content.HRef}}">{{.Name}}</a> ({{.SizeStr}})
 				{{end}}
 				</ul>
 			{{end}}
@@ -255,8 +261,12 @@ hr {
 </body>
 </html>`))
 
-func getBuildTypes(base string) ([]buildType, error) {
-	url := fmt.Sprintf("%s/guestAuth/app/rest/buildTypes", base)
+func getBuildTypes() ([]buildType, error) {
+	extra := ""
+	if projectName != "" {
+		extra = "?locator=affectedProject:(id:" + projectName + ")"
+	}
+	url := fmt.Sprintf("/app/rest/buildTypes%s", extra)
 	var res buildTypeResponse
 	if err := getJSON(url, &res); err != nil {
 		return nil, err
@@ -264,8 +274,8 @@ func getBuildTypes(base string) ([]buildType, error) {
 	return res.BuildTypes, nil
 }
 
-func getLatestBuild(base, buildTypeID, branch string) (build, error) {
-	url := fmt.Sprintf("%s/guestAuth/app/rest/buildTypes/id:%s/builds?locator=branch:%s,state:finished,status:SUCCESS,count:1", base, buildTypeID, branch)
+func getLatestBuild(buildTypeID, branch string) (build, error) {
+	url := fmt.Sprintf("/app/rest/buildTypes/id:%s/builds?locator=branch:%s,state:finished,status:SUCCESS,count:1", buildTypeID, branch)
 	var res buildResponse
 	if err := getJSON(url, &res); err != nil {
 		return build{}, err
@@ -277,15 +287,15 @@ func getLatestBuild(base, buildTypeID, branch string) (build, error) {
 	// re-get the build for more info
 
 	var b build
-	if err := getJSON(base+res.Builds[0].HRef, &b); err != nil {
+	if err := getJSON(res.Builds[0].HRef, &b); err != nil {
 		return build{}, err
 	}
 
 	return b, nil
 }
 
-func getFiles(base string, buildID int) ([]file, error) {
-	url := fmt.Sprintf("%s/guestAuth/app/rest/builds/id:%d/artifacts/children", base, buildID)
+func getFiles(buildID int) ([]file, error) {
+	url := fmt.Sprintf("/app/rest/builds/id:%d/artifacts/children", buildID)
 	var res artifactResponse
 	if err := getJSON(url, &res); err != nil {
 		return nil, err
@@ -294,11 +304,30 @@ func getFiles(base string, buildID int) ([]file, error) {
 }
 
 func getJSON(url string, into interface{}) error {
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	authPart := ""
+	switch {
+	case strings.HasPrefix(url, "/guestAuth"):
+	case strings.HasPrefix(url, "/httpAuth"):
+	case auth != "":
+		authPart = "/httpAuth"
+	default:
+		authPart = "/guestAuth"
+	}
+
+	req, err := http.NewRequest(http.MethodGet, base+authPart+url, nil)
 	if err != nil {
 		return err
 	}
+
 	req.Header.Set("Accept", "application/json")
+	if auth != "" {
+		fields := strings.Split(auth, ":")
+		if len(fields) == 2 {
+			req.SetBasicAuth(fields[0], fields[1])
+		}
+	}
+
+	log.Println(req.URL)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
