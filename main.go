@@ -247,6 +247,8 @@ hr {
 		{{end}}
 	{{end}}
 {{end}}
+<hr>
+<p class="text-muted">Served by <a href="https://kastelo.io/tcbuilds">kastelo.io/tcbuilds</a>.
 </div>
 </div>
 </div>
