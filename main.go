@@ -23,6 +23,7 @@ var (
 	auth         = ""
 	maxCacheTime = 5 * time.Minute
 	projectName  = ""
+	title        = ""
 )
 
 func main() {
@@ -31,6 +32,7 @@ func main() {
 	flag.StringVar(&listen, "listen", listen, "Server listen address")
 	flag.StringVar(&projectName, "project", projectName, "Top level project")
 	flag.StringVar(&auth, "auth", auth, "username:password")
+	flag.StringVar(&title, "title", title, "Custom page title")
 	flag.DurationVar(&maxCacheTime, "cache", maxCacheTime, "Cache life time")
 	flag.Parse()
 
@@ -112,6 +114,7 @@ func getTpl() ([]byte, error) {
 		"Branch":   branch,
 		"Base":     base,
 		"Projects": projs,
+		"Title":    title,
 	}
 	buf := new(bytes.Buffer)
 	if err := tpl.Execute(buf, data); err != nil {
@@ -207,7 +210,11 @@ func (f file) SizeStr() string {
 var tpl = template.Must(template.New("index.html").Parse(`<!DOCTYPE html>
 <html lang="en">
 <head>
+{{if .Title}}
+<title>{{.Title}}</title>
+{{else}}
 <title>Latest builds of {{.Branch}}</title>
+{{end}}
 <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0-alpha.6/css/bootstrap.min.css" integrity="sha384-rwoIResjU2yc3z8GV/NPeZWAv56rSmLldC3R/AZzGRnGxQQKnKkoFVhFQhNUwEyJ" crossorigin="anonymous">
 <script src="https://code.jquery.com/jquery-3.1.1.slim.min.js" integrity="sha384-A7FZj7v+d/sdmMqp/nOQwliLvUsJfDHW+k9Omg/a/EheAdgtzNs3hpfag6Ed950n" crossorigin="anonymous"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/tether/1.4.0/js/tether.min.js" integrity="sha384-DztdAPBWPRXSA/3eYEEUWrWCy7G5KFbe8fFjk5JAIxUYHKkDx6Qin1DkWx51bBrb" crossorigin="anonymous"></script>
@@ -229,7 +236,11 @@ hr {
 <div class="container">
 <div class="row">
 <div class="col">
+{{if .Title}}
+<h1>{{.Title}}</h1>
+{{else}}
 <h1>Latest builds of <code>{{.Branch}}</code></h1>
+{{end}}
 {{range $idx, $proj := .Projects}}
 	{{if $proj.Builds}}
 		{{if gt $idx 0}}<hr/>{{end}}
