@@ -37,38 +37,58 @@ func main() {
 	flag.Parse()
 
 	http.HandleFunc("/", handler)
+	http.HandleFunc("/refresh", refresh)
+
+	go refreshLoop()
+	refreshRequests <- struct{}{}
+
 	http.ListenAndServe(listen, nil)
 }
 
 var (
-	cacheData []byte
-	cacheTime time.Time
-	cacheMut  sync.Mutex
+	refreshRequests = make(chan struct{}, 1)
+	cacheData       []byte
+	cacheMut        sync.Mutex
 )
 
 func handler(w http.ResponseWriter, req *http.Request) {
-	t0 := time.Now()
-	defer func() {
-		log.Println("Done in", time.Since(t0))
-	}()
 	cacheMut.Lock()
-	if cacheData == nil || time.Since(cacheTime) > maxCacheTime {
-		log.Println("Refresh cache")
-		bs, err := getTpl()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			cacheMut.Unlock()
-			return
-		}
-		cacheData = bs
-		cacheTime = time.Now()
-	}
-	log.Println("Use data from", cacheTime)
 	bs := cacheData
 	cacheMut.Unlock()
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write(bs)
+}
+
+func refresh(_ http.ResponseWriter, _ *http.Request) {
+	select {
+	case refreshRequests <- struct{}{}:
+	default:
+	}
+}
+
+func refreshLoop() {
+	for _ = range refreshRequests {
+		refreshCache()
+	}
+}
+
+func refreshCache() {
+	t0 := time.Now()
+	defer func() {
+		log.Println("Done in", time.Since(t0))
+	}()
+
+	cacheMut.Lock()
+	defer cacheMut.Unlock()
+
+	log.Println("Refresh cache")
+	bs, err := getTpl()
+	if err != nil {
+		return
+	}
+
+	cacheData = bs
 }
 
 func getTpl() ([]byte, error) {
@@ -127,6 +147,10 @@ func getTpl() ([]byte, error) {
 type project struct {
 	Name   string
 	Builds []buildType
+}
+
+func (p project) NameID() string {
+	return strings.Replace(p.Name, " ", "-", -1)
 }
 
 type buildTypeResponse struct {
@@ -244,7 +268,7 @@ hr {
 {{range $idx, $proj := .Projects}}
 	{{if $proj.Builds}}
 		{{if gt $idx 0}}<hr/>{{end}}
-		<h2>{{$proj.Name}}</h2>
+		<h2 id="{{$proj.NameID}}">{{$proj.Name}}</h2>
 		{{range $proj.Builds}}
 			{{if .Build.Files}}
 				{{if gt (len $proj.Builds) 1}}
