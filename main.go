@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"html/template"
@@ -14,10 +13,12 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/pkg/errors"
 )
 
 var (
-	base         = "https://build2.syncthing.net"
+	base         = "https://build.kastelo.net"
 	branch       = "master"
 	listen       = "127.0.0.1:8123"
 	auth         = ""
@@ -37,7 +38,7 @@ func main() {
 	flag.Parse()
 
 	http.HandleFunc("/", handler)
-	http.HandleFunc("/refresh", refresh)
+	http.HandleFunc("/refresh/", refresh)
 
 	go refreshLoop()
 	refreshRequests <- struct{}{}
@@ -85,7 +86,7 @@ func refreshCache() {
 	log.Println("Refresh cache")
 	bs, err := getTpl()
 	if err != nil {
-		return
+		log.Println(err)
 	}
 
 	cacheData = bs
@@ -94,7 +95,7 @@ func refreshCache() {
 func getTpl() ([]byte, error) {
 	types, err := getBuildTypes()
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "getTpl")
 	}
 
 	sort.Slice(types, func(a, b int) bool {
@@ -138,7 +139,7 @@ func getTpl() ([]byte, error) {
 	}
 	buf := new(bytes.Buffer)
 	if err := tpl.Execute(buf, data); err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "execute template")
 	}
 
 	return buf.Bytes(), nil
@@ -271,10 +272,7 @@ hr {
 		<h2 id="{{$proj.NameID}}">{{$proj.Name}}</h2>
 		{{range $proj.Builds}}
 			{{if .Build.Files}}
-				{{if gt (len $proj.Builds) 1}}
-					<h4>{{.Name}}</h4>
-				{{end}}
-				<h5>Build <a href="{{.Build.WebURL}}">#{{.Build.Number}}</a></h5>
+				<h4>{{.Name}} <a href="{{.Build.WebURL}}">#{{.Build.Number}}</a></h4>
 				<p>
 				Status: {{.Build.StatusText}}<br>
 				Completed: {{.Build.DateStr}}<br>
@@ -304,7 +302,7 @@ func getBuildTypes() ([]buildType, error) {
 	url := fmt.Sprintf("/app/rest/buildTypes%s", extra)
 	var res buildTypeResponse
 	if err := getJSON(url, &res); err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "get build types")
 	}
 	return res.BuildTypes, nil
 }
@@ -313,7 +311,7 @@ func getLatestBuild(buildTypeID, branch string) (build, error) {
 	url := fmt.Sprintf("/app/rest/buildTypes/id:%s/builds?locator=branch:%s,state:finished,status:SUCCESS,count:1", buildTypeID, branch)
 	var res buildResponse
 	if err := getJSON(url, &res); err != nil {
-		return build{}, err
+		return build{}, errors.Wrap(err, "get latest build")
 	}
 	if len(res.Builds) != 1 {
 		return build{}, errors.New("no build found")
@@ -323,7 +321,7 @@ func getLatestBuild(buildTypeID, branch string) (build, error) {
 
 	var b build
 	if err := getJSON(res.Builds[0].HRef, &b); err != nil {
-		return build{}, err
+		return build{}, errors.Wrap(err, "get latest build details")
 	}
 
 	return b, nil
@@ -333,7 +331,7 @@ func getFiles(buildID int) ([]file, error) {
 	url := fmt.Sprintf("/app/rest/builds/id:%d/artifacts/children", buildID)
 	var res artifactResponse
 	if err := getJSON(url, &res); err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "get files")
 	}
 	return res.Files, nil
 }
@@ -351,7 +349,7 @@ func getJSON(url string, into interface{}) error {
 
 	req, err := http.NewRequest(http.MethodGet, base+authPart+url, nil)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "create request")
 	}
 
 	req.Header.Set("Accept", "application/json")
@@ -366,7 +364,7 @@ func getJSON(url string, into interface{}) error {
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "HTTP get")
 	}
 	defer resp.Body.Close()
 
@@ -376,8 +374,8 @@ func getJSON(url string, into interface{}) error {
 
 	bs, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "HTTP read")
 	}
 
-	return json.Unmarshal(bs, into)
+	return errors.Wrap(json.Unmarshal(bs, into), "JSON unmarshal")
 }
