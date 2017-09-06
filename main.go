@@ -9,6 +9,8 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -22,9 +24,10 @@ var (
 	branch       = "master"
 	listen       = "127.0.0.1:8123"
 	auth         = ""
-	maxCacheTime = 5 * time.Minute
+	maxCacheTime = 24 * time.Hour
 	projectName  = ""
-	title        = ""
+	templateFile = "template.html"
+	tpl          *template.Template
 )
 
 func main() {
@@ -33,9 +36,16 @@ func main() {
 	flag.StringVar(&listen, "listen", listen, "Server listen address")
 	flag.StringVar(&projectName, "project", projectName, "Top level project")
 	flag.StringVar(&auth, "auth", auth, "username:password")
-	flag.StringVar(&title, "title", title, "Custom page title")
 	flag.DurationVar(&maxCacheTime, "cache", maxCacheTime, "Cache life time")
+	flag.StringVar(&templateFile, "template-file", templateFile, "Path to template file")
 	flag.Parse()
+
+	var err error
+	tpl, err = template.New(filepath.Base(templateFile)).ParseFiles(templateFile)
+	if err != nil {
+		fmt.Println("Parsing template:", err)
+		os.Exit(1)
+	}
 
 	http.HandleFunc("/", handler)
 	http.HandleFunc("/refresh/", refresh)
@@ -135,7 +145,6 @@ func getTpl() ([]byte, error) {
 		"Branch":   branch,
 		"Base":     base,
 		"Projects": projs,
-		"Title":    title,
 	}
 	buf := new(bytes.Buffer)
 	if err := tpl.Execute(buf, data); err != nil {
@@ -152,6 +161,14 @@ type project struct {
 
 func (p project) NameID() string {
 	return strings.Replace(p.Name, " ", "-", -1)
+}
+
+func (p project) TotalFiles() int {
+	count := 0
+	for _, b := range p.Builds {
+		count += len(b.Build.Files)
+	}
+	return count
 }
 
 type buildTypeResponse struct {
@@ -231,68 +248,6 @@ func (f file) SizeStr() string {
 	kib := float64(f.Size) / KiB
 	return fmt.Sprintf("%.01f KiB", kib)
 }
-
-var tpl = template.Must(template.New("index.html").Parse(`<!DOCTYPE html>
-<html lang="en">
-<head>
-{{if .Title}}
-<title>{{.Title}}</title>
-{{else}}
-<title>Latest builds of {{.Branch}}</title>
-{{end}}
-<link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0-alpha.6/css/bootstrap.min.css" integrity="sha384-rwoIResjU2yc3z8GV/NPeZWAv56rSmLldC3R/AZzGRnGxQQKnKkoFVhFQhNUwEyJ" crossorigin="anonymous">
-<script src="https://code.jquery.com/jquery-3.1.1.slim.min.js" integrity="sha384-A7FZj7v+d/sdmMqp/nOQwliLvUsJfDHW+k9Omg/a/EheAdgtzNs3hpfag6Ed950n" crossorigin="anonymous"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/tether/1.4.0/js/tether.min.js" integrity="sha384-DztdAPBWPRXSA/3eYEEUWrWCy7G5KFbe8fFjk5JAIxUYHKkDx6Qin1DkWx51bBrb" crossorigin="anonymous"></script>
-<script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0-alpha.6/js/bootstrap.min.js" integrity="sha384-vBWWzlZJ8ea9aCX4pEW3rVHjgjt7zpkNpZk+02D9phzyeVkE+jo0ieGizqPLForn" crossorigin="anonymous"></script>
-<style type="text/css">
-body {
-	margin: 4em;
-}
-h1, h2, h3 {
-	margin-bottom: 0.5em;
-}
-hr {
-	margin-top: 1.5em;
-	margin-bottom: 1.5em;
-}
-</style>
-</head>
-<body>
-<div class="container">
-<div class="row">
-<div class="col">
-{{if .Title}}
-<h1>{{.Title}}</h1>
-{{else}}
-<h1>Latest builds of <code>{{.Branch}}</code></h1>
-{{end}}
-{{range $idx, $proj := .Projects}}
-	{{if $proj.Builds}}
-		{{if gt $idx 0}}<hr/>{{end}}
-		<h2 id="{{$proj.NameID}}">{{$proj.Name}}</h2>
-		{{range $proj.Builds}}
-			{{if .Build.Files}}
-				<h4>{{.Name}} <a href="{{.Build.WebURL}}">#{{.Build.Number}}</a></h4>
-				<p>
-				Status: {{.Build.StatusText}}<br>
-				Completed: {{.Build.DateStr}}<br>
-				</p>
-				<ul>
-				{{range .Build.Files}}
-					<li><a href="{{$.Base}}{{.Content.HRef}}">{{.Name}}</a> ({{.SizeStr}})
-				{{end}}
-				</ul>
-			{{end}}
-		{{end}}
-	{{end}}
-{{end}}
-<hr>
-<p class="text-muted">Served by <a href="https://kastelo.io/tcbuilds">kastelo.io/tcbuilds</a>.
-</div>
-</div>
-</div>
-</body>
-</html>`))
 
 func getBuildTypes() ([]buildType, error) {
 	extra := ""
